@@ -4,10 +4,8 @@ import random
 from datetime import date, timedelta
 
 # Add the parent directory to the system path to import tennis_predictor
-# This assumes tournament_simulator.py is at the same level as tennis_predictor.py
-# If tennis_predictor.py is in a 'scripts' folder, adjust this path accordingly.
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(script_dir)) # Assuming tennis_predictor.py is in project root
+project_root = os.path.abspath(os.path.join(script_dir))
 sys.path.insert(0, project_root)
 
 try:
@@ -19,20 +17,17 @@ except ImportError:
     sys.exit(1)
 
 # --- Configuration for the Tournament ---
-TOURNAMENT_SIZE = 16 # Changed from 128 to 16
+TOURNAMENT_SIZE = 16
 TOURNAMENT_NAME = "Mock Wimbledon 2025"
-TOURNAMENT_SURFACE = "Grass" # Important for surface-specific features
-START_DATE = date(2025, 7, 1) # Start date for the tournament simulation
+TOURNAMENT_SURFACE = "Grass"  # Important for surface-specific features
+TOURNAMENT_BEST_OF = 3  # Best of 3 sets (5 for Grand Slams if your model supports it)
+START_DATE = date(2025, 7, 1)
 
-# --- Mock Player Data (REPLACE WITH YOUR ACTUAL PLAYER IDs AND NAMES) ---
-# IMPORTANT: These are placeholder IDs. For accurate results, replace these
-# with actual player_id values found in your player_df_historical.joblib.
-# You can get a list of player IDs from your raw ATP data files.
-# Example: Novak Djokovic (104925), Carlos Alcaraz (200780), Jannik Sinner (200000 or 105357)
-# You need 16 unique player IDs for a 16-man tournament.
+# --- Mock Player Data ---
+# These are actual ATP player IDs that should work with your historical data
 player_data = {
     104925: "Novak Djokovic",
-    207989: "Carlos Alcaraz",
+    207989: "Carlos Alcaraz", 
     206173: "Jannik Sinner",
     106421: "Daniil Medvedev",
     100644: "Alexander Zverev",
@@ -46,89 +41,239 @@ player_data = {
     210097: "Ben Shelton",
     126207: "Frances Tiafoe",
     208029: "Holger Rune",
-    200000: "Felix Auger-Aliassime",
-    # If TOURNAMENT_SIZE is 16, this list is now sufficient.
-    # If you reduce TOURNAMENT_SIZE further, you can remove players from this list.
+    200055: "Felix Auger-Aliassime",  # Updated ID
 }
 
-# Auto-fill remaining players if less than TOURNAMENT_SIZE are provided
+# Verify we have enough players
 if len(player_data) < TOURNAMENT_SIZE:
-    print(f"Warning: Only {len(player_data)} players provided. Auto-filling with generic players.")
-    current_max_id = max(player_data.keys()) if player_data else 900000 # Start IDs higher for generics
+    print(f"Warning: Only {len(player_data)} players provided for {TOURNAMENT_SIZE} player tournament.")
+    print("Adding generic players to fill the tournament...")
+    current_max_id = max(player_data.keys()) if player_data else 900000
     for i in range(TOURNAMENT_SIZE - len(player_data)):
         current_max_id += 1
         player_data[current_max_id] = f"Generic Player {current_max_id}"
 
-# Convert to a list of (ID, Name) tuples for shuffling
+# Convert to list and randomize draw
 players_list = list(player_data.items())
-random.shuffle(players_list) # Randomize seeding for the draw
+random.shuffle(players_list)
 
-# --- Tournament Simulation Logic ---
+def get_round_name(num_players):
+    """Get the proper round name based on number of remaining players."""
+    if num_players == 2:
+        return "Final"
+    elif num_players == 4:
+        return "Semi-Finals"
+    elif num_players == 8:
+        return "Quarter-Finals"
+    elif num_players == 16:
+        return "Round of 16"
+    elif num_players == 32:
+        return "Round of 32"
+    elif num_players == 64:
+        return "Round of 64"
+    elif num_players == 128:
+        return "First Round"
+    else:
+        # Calculate round number from the back
+        import math
+        round_from_final = int(math.log2(num_players))
+        return f"Round of {num_players}"
 
 def simulate_round(matches_in_round, current_date, round_name):
     """Simulates matches for a single round and returns the winners."""
-    print(f"\n--- {round_name} ({len(matches_in_round)} Matches) - Date: {current_date.strftime('%Y-%m-%d')} ---")
+    print(f"\n{'='*60}")
+    print(f"{round_name} - {current_date.strftime('%B %d, %Y')}")
+    print(f"{len(matches_in_round)} matches on {TOURNAMENT_SURFACE} surface")
+    print(f"{'='*60}")
+    
     winners_of_round = []
-    for i, (p1_id, p1_name, p2_id, p2_name) in enumerate(matches_in_round):
-        print(f"\nMatch {i+1}: {p1_name} (ID: {p1_id}) vs {p2_name} (ID: {p2_id})")
-        # Call your predict_match_outcome function
-        # Note: tourney_date is passed as a datetime.date object, which predict_match_outcome converts to Timestamp
-        prediction_result, probabilities = predict_match_outcome(p1_id, p2_id, current_date)
-
-        if prediction_result is None:
-            print(f"  Prediction failed for {p1_name} vs {p2_name}. Skipping match.")
-            # Simple fallback: randomly pick a winner if prediction fails
-            winner_id, winner_name = random.choice([(p1_id, p1_name), (p2_id, p2_name)])
-            print(f"  (Fallback: Randomly selected {winner_name} as winner)")
-        else:
-            if prediction_result == 1:
-                winner_id, winner_name = p1_id, p1_name
+    
+    for match_num, (p1_id, p1_name, p2_id, p2_name) in enumerate(matches_in_round, 1):
+        print(f"\nMatch {match_num}: {p1_name} vs {p2_name}")
+        print(f"  Player IDs: {p1_id} vs {p2_id}")
+        
+        try:
+            # Call prediction function with surface and best_of parameters
+            prediction_result, win_probability = predict_match_outcome(
+                p1_id, p2_id, current_date, 
+                surface=TOURNAMENT_SURFACE, 
+                best_of=TOURNAMENT_BEST_OF
+            )
+            
+            if prediction_result is None or win_probability is None:
+                print(f"  ⚠️  Prediction failed - using random selection")
+                winner_id, winner_name = random.choice([(p1_id, p1_name), (p2_id, p2_name)])
+                loser_id, loser_name = (p2_id, p2_name) if winner_id == p1_id else (p1_id, p1_name)
             else:
-                winner_id, winner_name = p2_id, p2_name
-            print(f"  Predicted Winner: {winner_name} (P1 Win Prob: {probabilities[1]:.2f}, P2 Win Prob: {probabilities[0]:.2f})")
-
-        winners_of_round.append((winner_id, winner_name))
+                # prediction_result: 1 if P1 wins, 0 if P2 wins
+                # win_probability: probability that P1 wins
+                if prediction_result == 1:
+                    winner_id, winner_name = p1_id, p1_name
+                    loser_id, loser_name = p2_id, p2_name
+                else:
+                    winner_id, winner_name = p2_id, p2_name
+                    loser_id, loser_name = p1_id, p1_name
+                
+                p1_win_prob = win_probability
+                p2_win_prob = 1 - win_probability
+                
+                print(f"  📊 Win Probabilities:")
+                print(f"    {p1_name}: {p1_win_prob:.1%}")
+                print(f"    {p2_name}: {p2_win_prob:.1%}")
+            
+            print(f"  🏆 Winner: {winner_name}")
+            winners_of_round.append((winner_id, winner_name))
+            
+        except Exception as e:
+            print(f"  ❌ Error during prediction: {e}")
+            print(f"  Using random selection as fallback...")
+            winner_id, winner_name = random.choice([(p1_id, p1_name), (p2_id, p2_name)])
+            winners_of_round.append((winner_id, winner_name))
+            print(f"  🎲 Random Winner: {winner_name}")
+    
     return winners_of_round
+
+def print_tournament_bracket(current_players, round_name):
+    """Print the current tournament bracket."""
+    print(f"\n{round_name} Bracket:")
+    print("-" * 40)
+    for i in range(0, len(current_players), 2):
+        if i + 1 < len(current_players):
+            p1_name = current_players[i][1]
+            p2_name = current_players[i+1][1]
+            print(f"  {p1_name} vs {p2_name}")
+    print("-" * 40)
 
 def run_tournament():
     """Runs the full tournament simulation."""
     if not players_list:
-        print("No players available for the tournament. Please populate player_data.")
+        print("❌ No players available for the tournament. Please populate player_data.")
         return
-
-    current_players = players_list[:] # Start with all players
+    
+    # Ensure we have exactly the right number of players (power of 2)
+    if TOURNAMENT_SIZE & (TOURNAMENT_SIZE - 1) != 0:
+        print(f"⚠️  Tournament size ({TOURNAMENT_SIZE}) is not a power of 2.")
+        print("Tournament brackets work best with 2, 4, 8, 16, 32, 64, 128 players.")
+    
+    current_players = players_list[:TOURNAMENT_SIZE]
     current_date = START_DATE
-    round_num = 1
-
-    print(f"\n--- Starting {TOURNAMENT_NAME} ({TOURNAMENT_SIZE} Players) ---")
-
+    
+    print(f"\n🎾 {TOURNAMENT_NAME}")
+    print(f"📅 Start Date: {START_DATE.strftime('%B %d, %Y')}")
+    print(f"🏟️  Surface: {TOURNAMENT_SURFACE}")
+    print(f"👥 Players: {len(current_players)}")
+    print(f"🏆 Format: Best of {TOURNAMENT_BEST_OF}")
+    
+    # Print initial bracket
+    print(f"\n🗓️  Tournament Draw:")
+    print("=" * 50)
+    for i, (player_id, player_name) in enumerate(current_players, 1):
+        print(f"{i:2d}. {player_name} (ID: {player_id})")
+    print("=" * 50)
+    
+    round_number = 1
+    tournament_results = []
+    
     while len(current_players) > 1:
-        round_name = ""
-        # Adjusted round names for a smaller tournament if needed, but general logic holds
-        if len(current_players) == 16: round_name = "Round of 16"
-        elif len(current_players) == 8: round_name = "Quarter-Finals"
-        elif len(current_players) == 4: round_name = "Semi-Finals"
-        elif len(current_players) == 2: round_name = "Final"
-        else: round_name = f"Round {round_num}" # Fallback for other sizes
-
-        # Pair players for the current round
+        round_name = get_round_name(len(current_players))
+        
+        # Print bracket for this round
+        print_tournament_bracket(current_players, round_name)
+        
+        # Create matches for this round
         matches_for_round = []
         for i in range(0, len(current_players), 2):
-            player1 = current_players[i]
-            player2 = current_players[i+1]
-            matches_for_round.append((player1[0], player1[1], player2[0], player2[1])) # (id1, name1, id2, name2)
-
-        # Simulate the round
-        winners = simulate_round(matches_for_round, current_date, round_name)
+            if i + 1 < len(current_players):
+                player1 = current_players[i]
+                player2 = current_players[i + 1]
+                matches_for_round.append((player1[0], player1[1], player2[0], player2[1]))
+        
+        # Handle odd number of players (bye)
+        if len(current_players) % 2 == 1:
+            bye_player = current_players[-1]
+            print(f"\n🎫 {bye_player[1]} receives a bye to the next round")
+            winners = simulate_round(matches_for_round, current_date, round_name)
+            winners.append(bye_player)
+        else:
+            winners = simulate_round(matches_for_round, current_date, round_name)
+        
+        # Store round results
+        round_result = {
+            'round': round_name,
+            'date': current_date,
+            'matches': matches_for_round,
+            'winners': winners[:]
+        }
+        tournament_results.append(round_result)
+        
+        # Advance to next round
         current_players = winners
-        current_date += timedelta(days=1) # Advance date for next round
-        round_num += 1
-
+        current_date += timedelta(days=2)  # 2 days between rounds
+        round_number += 1
+        
+        # Print round summary
+        print(f"\n📋 {round_name} Results:")
+        for winner_id, winner_name in winners:
+            print(f"  ✅ {winner_name}")
+    
+    # Tournament complete
     if current_players:
         champion_id, champion_name = current_players[0]
-        print(f"\n--- {TOURNAMENT_NAME} Champion: {champion_name} (ID: {champion_id}) ---")
+        print(f"\n🏆 {TOURNAMENT_NAME} CHAMPION: {champion_name} (ID: {champion_id}) 🏆")
+        
+        # Print tournament summary
+        print(f"\n📊 Tournament Summary:")
+        print(f"🗓️  Duration: {START_DATE.strftime('%B %d')} - {(current_date - timedelta(days=2)).strftime('%B %d, %Y')}")
+        print(f"🏟️  Surface: {TOURNAMENT_SURFACE}")
+        print(f"🎾 Total Rounds: {len(tournament_results)}")
+        print(f"👑 Champion: {champion_name}")
+        
     else:
-        print("\nTournament ended with no champion (unexpected error).")
+        print("\n❌ Tournament ended with no champion (unexpected error).")
+    
+    return tournament_results
+
+def print_player_path_to_title(champion_name, tournament_results):
+    """Print the path the champion took to win the tournament."""
+    print(f"\n🛤️  {champion_name}'s Path to Victory:")
+    print("-" * 50)
+    
+    for round_result in tournament_results:
+        round_name = round_result['round']
+        matches = round_result['matches']
+        winners = round_result['winners']
+        
+        # Find the match involving the champion
+        champion_match = None
+        for match in matches:
+            p1_id, p1_name, p2_id, p2_name = match
+            if p1_name == champion_name or p2_name == champion_name:
+                opponent = p2_name if p1_name == champion_name else p1_name
+                champion_match = f"def. {opponent}"
+                break
+        
+        if champion_match:
+            print(f"  {round_name}: {champion_match}")
 
 if __name__ == "__main__":
-    run_tournament()
+    print("🎾 Tennis Tournament Simulator")
+    print("=" * 40)
+    
+    try:
+        results = run_tournament()
+        
+        if results and len(results) > 0:
+            # Get champion from final results
+            final_round = results[-1]
+            if final_round['winners']:
+                champion_name = final_round['winners'][0][1]
+                print_player_path_to_title(champion_name, results)
+        
+        print(f"\n✅ Tournament simulation completed successfully!")
+        
+    except KeyboardInterrupt:
+        print(f"\n\n⏹️  Tournament simulation interrupted by user.")
+    except Exception as e:
+        print(f"\n❌ Tournament simulation failed with error: {e}")
+        import traceback
+        traceback.print_exc()
